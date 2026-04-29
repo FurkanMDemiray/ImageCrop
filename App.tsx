@@ -2,31 +2,53 @@ import React, { useState } from 'react';
 import { View, Image, StyleSheet } from 'react-native';
 import ImageCropPicker, { CroppedImage } from './ImageCropPicker';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function App() {
   const [cropped, setCropped] = useState<CroppedImage | null>(null);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={styles.container}>
-        <ImageCropPicker
-          defaultAspectRatio="free"
-          onCropComplete={result => {
-            setCropped(result);
-            console.log('Crop region (pixels):', result.cropRegion);
-          }}
-          onCancel={() => console.log('User cancelled')}
-        />
+      <SafeAreaView style={{ flex: 1 }}>
+        <View style={styles.container}>
+          <View style={{ flex: 1 }}>
+            <ImageCropPicker
+              defaultAspectRatio="free"
+              onCropComplete={result => {
+                setCropped(result);
+                console.log('Crop region (pixels):', result.cropRegion);
+              }}
+              onCancel={() => console.log('User cancelled')}
+            />
+          </View>
 
-        {cropped && (
-          <Image source={{ uri: cropped.uri }} style={styles.preview} />
-        )}
-      </View>
+          {cropped && (
+            <View
+              style={{
+                flex: 1,
+                padding: 20,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <Image source={{ uri: cropped.uri }} style={styles.preview} />
+            </View>
+          )}
+        </View>
+      </SafeAreaView>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0d0d0d' },
-  preview: { width: 200, height: 200, marginTop: 20, alignSelf: 'center' },
+  container: {
+    flex: 1,
+    backgroundColor: '#0d0d0d',
+  },
+  preview: {
+    width: '70%',
+    height: '70%',
+    resizeMode: 'contain',
+    alignSelf: 'center',
+  },
 });
