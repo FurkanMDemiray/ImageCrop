@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Image, Text, StyleSheet } from 'react-native';
+import { View, Image, StyleSheet } from 'react-native';
 import ImageCropPicker, { CroppedImage } from './ImageCropPicker';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 

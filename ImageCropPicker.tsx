@@ -9,6 +9,7 @@ import {
   PanResponder,
   GestureResponderEvent,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import {
   launchCamera,
@@ -16,6 +17,7 @@ import {
   ImagePickerResponse,
   Asset,
 } from 'react-native-image-picker';
+import ImageEditor from '@react-native-community/image-editor';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +107,7 @@ const ImageCropPicker: React.FC<Props> = ({
   const [aspectRatio, setAspectRatio] =
     useState<AspectRatio>(defaultAspectRatio);
   const [box, setBox] = useState<Box>({ x: 0, y: 0, w: 0, h: 0 });
+  const [isCropping, setIsCropping] = useState(false);
 
   // Refs so PanResponder callbacks never get stale closures
   const boxRef = useRef<Box>(box);
@@ -135,7 +138,7 @@ const ImageCropPicker: React.FC<Props> = ({
   const openCamera = () =>
     launchCamera({ mediaType: 'photo', quality: 1 }, onPickerResponse);
 
-  // ─── Container layout ─────────────────────────────────────────────────────
+  // Container layout
   // measureInWindow gives us true page coords — this is the key fix.
 
   const onContainerLayout = useCallback(() => {
@@ -144,14 +147,13 @@ const ImageCropPicker: React.FC<Props> = ({
       const rect = containRect(px, py, pw, ph, nat.w, nat.h);
       imgRect.current = rect;
 
-      const margin = 0.1;
-      const bw = rect.w * (1 - margin * 2);
-      const rv = ratioVal(aspectRef.current);
-      const bh = rv ? bw / rv : rect.h * (1 - margin * 2);
+      // Use full image bounds (no margin)
+      const bw = rect.w;
+      const bh = rect.h;
 
       commitBox({
-        x: rect.x + rect.w * margin,
-        y: rect.y + (rect.h - bh) / 2,
+        x: rect.x,
+        y: rect.y,
         w: bw,
         h: bh,
       });
@@ -277,26 +279,50 @@ const ImageCropPicker: React.FC<Props> = ({
 
   // ─── Confirm crop ─────────────────────────────────────────────────────────
 
-  const confirmCrop = () => {
-    if (!imageUri) return;
-    const img = imgRect.current;
-    const b = boxRef.current;
-    const scaleX = naturalSize.w / img.w;
-    const scaleY = naturalSize.h / img.h;
+  const confirmCrop = async () => {
+    if (!imageUri || isCropping) return;
 
-    onCropComplete({
-      uri: imageUri,
-      cropRegion: {
+    setIsCropping(true);
+
+    try {
+      const img = imgRect.current;
+      const b = boxRef.current;
+      const scaleX = naturalSize.w / img.w;
+      const scaleY = naturalSize.h / img.h;
+
+      const cropOffset = {
         x: Math.round((b.x - img.x) * scaleX),
         y: Math.round((b.y - img.y) * scaleY),
+      };
+      const cropSize = {
         width: Math.round(b.w * scaleX),
         height: Math.round(b.h * scaleY),
-      },
-    });
-    setModalVisible(false);
+      };
+
+      const croppedResult = await ImageEditor.cropImage(imageUri, {
+        offset: cropOffset,
+        size: cropSize,
+      });
+
+      onCropComplete({
+        uri: croppedResult.uri,
+        cropRegion: {
+          x: cropOffset.x,
+          y: cropOffset.y,
+          width: cropSize.width,
+          height: cropSize.height,
+        },
+      });
+    } catch (error) {
+      console.error('Crop error:', error);
+    } finally {
+      setIsCropping(false);
+      setModalVisible(false);
+    }
   };
 
   const cancel = () => {
+    if (isCropping) return;
     setModalVisible(false);
     setImageUri(null);
     onCancel?.();
@@ -434,11 +460,25 @@ const ImageCropPicker: React.FC<Props> = ({
           </View>
 
           <View style={st.actions}>
-            <TouchableOpacity style={st.cancelBtn} onPress={cancel}>
-              <Text style={st.cancelTxt}>Cancel</Text>
+            <TouchableOpacity
+              style={[st.cancelBtn, isCropping && st.btnDisabled]}
+              onPress={cancel}
+              disabled={isCropping}
+            >
+              <Text style={st.cancelTxt}>
+                {isCropping ? 'Processing...' : 'Cancel'}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={st.confirmBtn} onPress={confirmCrop}>
-              <Text style={st.confirmTxt}>Crop</Text>
+            <TouchableOpacity
+              style={[st.confirmBtn, isCropping && st.btnDisabled]}
+              onPress={confirmCrop}
+              disabled={isCropping}
+            >
+              {isCropping ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={st.confirmTxt}>Crop</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -515,6 +555,7 @@ const st = StyleSheet.create({
     alignItems: 'center',
   },
   cancelTxt: { color: '#aaa', fontSize: 16 },
+  btnDisabled: { opacity: 0.5 },
   confirmBtn: {
     flex: 1,
     marginLeft: 8,
