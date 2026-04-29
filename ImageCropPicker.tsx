@@ -3,14 +3,11 @@ import {
   View,
   Image,
   StyleSheet,
-  Dimensions,
   TouchableOpacity,
   Text,
   Modal,
   PanResponder,
   GestureResponderEvent,
-  PanResponderGestureState,
-  Alert,
   Platform,
 } from 'react-native';
 import {
@@ -19,8 +16,6 @@ import {
   ImagePickerResponse,
   Asset,
 } from 'react-native-image-picker';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,181 +30,228 @@ export interface CropRegion {
 
 export interface CroppedImage {
   uri: string;
-  width: number;
-  height: number;
   cropRegion: CropRegion;
 }
 
-interface CropBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+interface Box {
+  x: number; // absolute page X (left edge)
+  y: number; // absolute page Y (top edge)
+  w: number;
+  h: number;
 }
 
-type DragHandle = 'move' | 'tl' | 'tr' | 'bl' | 'br' | null;
+type Handle = 'tl' | 'tr' | 'bl' | 'br' | 'move' | null;
 
-interface ImageCropPickerProps {
+interface Props {
   onCropComplete: (result: CroppedImage) => void;
   onCancel?: () => void;
-  aspectRatio?: AspectRatio;
-  quality?: number; // 0–1
+  defaultAspectRatio?: AspectRatio;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const HANDLE_SIZE = 24;
-const MIN_CROP_SIZE = 60;
-const PREVIEW_PADDING = 20;
+const HS = 22; // handle visual size
+const HIT = 40; // handle hit slop (bigger = easier to grab on simulator)
+const MIN = 60; // minimum crop dimension in px
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getRatioValue(ratio: AspectRatio): number | null {
-  switch (ratio) {
-    case '1:1':
-      return 1;
-    case '16:9':
-      return 16 / 9;
-    case '4:3':
-      return 4 / 3;
-    default:
-      return null;
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, v));
+
+function ratioVal(r: AspectRatio): number | null {
+  if (r === '1:1') return 1;
+  if (r === '16:9') return 16 / 9;
+  if (r === '4:3') return 4 / 3;
+  return null;
+}
+
+/**
+ * Given a container's page position + size, and the natural image dimensions,
+ * returns the rect (in page/absolute coords) where the image actually renders
+ * under resizeMode="contain".
+ */
+function containRect(
+  cX: number,
+  cY: number,
+  cW: number,
+  cH: number,
+  imgW: number,
+  imgH: number,
+): { x: number; y: number; w: number; h: number } {
+  const cRatio = cW / cH;
+  const iRatio = imgW / imgH;
+  let w: number, h: number;
+  if (iRatio > cRatio) {
+    w = cW;
+    h = cW / iRatio;
+  } else {
+    h = cH;
+    w = cH * iRatio;
   }
+  return { x: cX + (cW - w) / 2, y: cY + (cH - h) / 2, w, h };
 }
 
-function clamp(val: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, val));
-}
+// ─── Component ────────────────────────────────────────────────────────────────
 
-// ─── Main Component ───────────────────────────────────────────────────────────
-
-const ImageCropPicker: React.FC<ImageCropPickerProps> = ({
+const ImageCropPicker: React.FC<Props> = ({
   onCropComplete,
   onCancel,
-  aspectRatio: initialAspectRatio = 'free',
-  quality = 0.9,
+  defaultAspectRatio = 'free',
 }) => {
   const [imageUri, setImageUri] = useState<string | null>(null);
-  const [imageLayout, setImageLayout] = useState({
-    x: 0,
-    y: 0,
-    width: 0,
-    height: 0,
-  });
-  const [naturalSize, setNaturalSize] = useState({ width: 1, height: 1 });
-  const [cropBox, setCropBox] = useState<CropBox>({
-    x: 40,
-    y: 40,
-    width: 200,
-    height: 200,
-  });
-  const [aspectRatio, setAspectRatio] =
-    useState<AspectRatio>(initialAspectRatio);
+  const [naturalSize, setNaturalSize] = useState({ w: 1, h: 1 });
   const [modalVisible, setModalVisible] = useState(false);
+  const [aspectRatio, setAspectRatio] =
+    useState<AspectRatio>(defaultAspectRatio);
+  const [box, setBox] = useState<Box>({ x: 0, y: 0, w: 0, h: 0 });
 
-  const activeHandle = useRef<DragHandle>(null);
-  const lastGesture = useRef({ x: 0, y: 0 });
-  const cropBoxRef = useRef<CropBox>(cropBox);
+  // Refs so PanResponder callbacks never get stale closures
+  const boxRef = useRef<Box>(box);
+  const imgRect = useRef({ x: 0, y: 0, w: 0, h: 0 });
+  const activeHandle = useRef<Handle>(null);
+  const lastPage = useRef({ x: 0, y: 0 });
+  const aspectRef = useRef<AspectRatio>(defaultAspectRatio);
+  const containerRef = useRef<View>(null);
 
-  cropBoxRef.current = cropBox;
-
-  // ─── Image Picking ────────────────────────────────────────────────────────
-
-  const pickFromLibrary = () => {
-    launchImageLibrary(
-      { mediaType: 'photo', quality: 1 },
-      handlePickerResponse,
-    );
+  const commitBox = (b: Box) => {
+    boxRef.current = b;
+    setBox(b);
   };
 
-  const pickFromCamera = () => {
-    launchCamera({ mediaType: 'photo', quality: 1 }, handlePickerResponse);
-  };
+  // ─── Pickers ──────────────────────────────────────────────────────────────
 
-  const handlePickerResponse = (response: ImagePickerResponse) => {
-    if (response.didCancel || response.errorCode) return;
-    const asset: Asset | undefined = response.assets?.[0];
+  const onPickerResponse = (res: ImagePickerResponse) => {
+    if (res.didCancel || res.errorCode) return;
+    const asset: Asset | undefined = res.assets?.[0];
     if (!asset?.uri) return;
-
+    setNaturalSize({ w: asset.width ?? 1, h: asset.height ?? 1 });
     setImageUri(asset.uri);
-    setNaturalSize({ width: asset.width ?? 1, height: asset.height ?? 1 });
     setModalVisible(true);
   };
 
-  // ─── Layout: init crop box once image renders ─────────────────────────────
+  const openGallery = () =>
+    launchImageLibrary({ mediaType: 'photo', quality: 1 }, onPickerResponse);
+  const openCamera = () =>
+    launchCamera({ mediaType: 'photo', quality: 1 }, onPickerResponse);
 
-  const onImageLayout = useCallback(
-    (layout: { x: number; y: number; width: number; height: number }) => {
-      setImageLayout(layout);
-      const pad = HANDLE_SIZE;
-      const w = layout.width - pad * 2;
-      const h = layout.height - pad * 2;
-      const initial = buildCropBox(pad, pad, w, h, aspectRatio);
-      setCropBox(initial);
-    },
-    [aspectRatio],
-  );
+  // ─── Container layout ─────────────────────────────────────────────────────
+  // measureInWindow gives us true page coords — this is the key fix.
 
-  // ─── Crop Box Builder (respects ratio) ───────────────────────────────────
+  const onContainerLayout = useCallback(() => {
+    containerRef.current?.measureInWindow((px, py, pw, ph) => {
+      const nat = naturalSize; // captured at call time; stable after picker
+      const rect = containRect(px, py, pw, ph, nat.w, nat.h);
+      imgRect.current = rect;
 
-  function buildCropBox(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    ratio: AspectRatio,
-  ): CropBox {
-    const r = getRatioValue(ratio);
-    if (r !== null) {
-      const newH = w / r;
-      return { x, y, width: w, height: newH };
-    }
-    return { x, y, width: w, height: h };
-  }
+      const margin = 0.1;
+      const bw = rect.w * (1 - margin * 2);
+      const rv = ratioVal(aspectRef.current);
+      const bh = rv ? bw / rv : rect.h * (1 - margin * 2);
 
-  // ─── Pan Responder ────────────────────────────────────────────────────────
+      commitBox({
+        x: rect.x + rect.w * margin,
+        y: rect.y + (rect.h - bh) / 2,
+        w: bw,
+        h: bh,
+      });
+    });
+  }, [naturalSize]);
 
-  const getHandleAt = (px: number, py: number): DragHandle => {
-    const b = cropBoxRef.current;
-    const hs = HANDLE_SIZE;
+  // ─── Handle detection (uses page coords throughout) ───────────────────────
 
-    if (Math.abs(px - b.x) < hs && Math.abs(py - b.y) < hs) return 'tl';
-    if (Math.abs(px - (b.x + b.width)) < hs && Math.abs(py - b.y) < hs)
-      return 'tr';
-    if (Math.abs(px - b.x) < hs && Math.abs(py - (b.y + b.height)) < hs)
-      return 'bl';
-    if (
-      Math.abs(px - (b.x + b.width)) < hs &&
-      Math.abs(py - (b.y + b.height)) < hs
-    )
-      return 'br';
-    if (px > b.x && px < b.x + b.width && py > b.y && py < b.y + b.height)
-      return 'move';
+  const detectHandle = (px: number, py: number): Handle => {
+    const b = boxRef.current;
+    const near = (ax: number, ay: number) =>
+      Math.abs(px - ax) < HIT && Math.abs(py - ay) < HIT;
+
+    if (near(b.x, b.y)) return 'tl';
+    if (near(b.x + b.w, b.y)) return 'tr';
+    if (near(b.x, b.y + b.h)) return 'bl';
+    if (near(b.x + b.w, b.y + b.h)) return 'br';
+    if (px > b.x && px < b.x + b.w && py > b.y && py < b.y + b.h) return 'move';
     return null;
   };
 
-  const panResponder = useRef(
+  // ─── Crop box resize / move ───────────────────────────────────────────────
+
+  const applyDelta = (handle: Handle, dx: number, dy: number) => {
+    const b = boxRef.current;
+    const img = imgRect.current;
+    const rv = ratioVal(aspectRef.current);
+
+    let { x, y, w, h } = b;
+
+    switch (handle) {
+      case 'move': {
+        x = clamp(x + dx, img.x, img.x + img.w - w);
+        y = clamp(y + dy, img.y, img.y + img.h - h);
+        break;
+      }
+      case 'tl': {
+        // Anchor: bottom-right corner stays fixed
+        const anchorX = b.x + b.w;
+        const anchorY = b.y + b.h;
+        w = clamp(b.w - dx, MIN, anchorX - img.x);
+        h = rv ? w / rv : clamp(b.h - dy, MIN, anchorY - img.y);
+        x = anchorX - w;
+        y = anchorY - h;
+        break;
+      }
+      case 'tr': {
+        // Anchor: bottom-left corner stays fixed
+        const anchorY = b.y + b.h;
+        w = clamp(b.w + dx, MIN, img.x + img.w - b.x);
+        h = rv ? w / rv : clamp(b.h - dy, MIN, anchorY - img.y);
+        x = b.x; // left edge fixed
+        y = anchorY - h;
+        break;
+      }
+      case 'bl': {
+        // Anchor: top-right corner stays fixed
+        const anchorX = b.x + b.w;
+        w = clamp(b.w - dx, MIN, anchorX - img.x);
+        h = rv ? w / rv : clamp(b.h + dy, MIN, img.y + img.h - b.y);
+        x = anchorX - w;
+        y = b.y; // top edge fixed
+        break;
+      }
+      case 'br': {
+        // Anchor: top-left corner stays fixed
+        w = clamp(b.w + dx, MIN, img.x + img.w - b.x);
+        h = rv ? w / rv : clamp(b.h + dy, MIN, img.y + img.h - b.y);
+        x = b.x;
+        y = b.y;
+        break;
+      }
+    }
+
+    // Guard: never escape image bounds
+    x = clamp(x, img.x, img.x + img.w - w);
+    y = clamp(y, img.y, img.y + img.h - h);
+
+    commitBox({ x, y, w, h });
+  };
+
+  // ─── PanResponder ─────────────────────────────────────────────────────────
+
+  const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
 
       onPanResponderGrant: (e: GestureResponderEvent) => {
-        const { locationX, locationY } = e.nativeEvent;
-        activeHandle.current = getHandleAt(locationX, locationY);
-        lastGesture.current = { x: locationX, y: locationY };
+        const { pageX, pageY } = e.nativeEvent;
+        activeHandle.current = detectHandle(pageX, pageY);
+        lastPage.current = { x: pageX, y: pageY };
       },
 
-      onPanResponderMove: (
-        _: GestureResponderEvent,
-        gs: PanResponderGestureState,
-      ) => {
-        const dx = gs.moveX - lastGesture.current.x;
-        const dy = gs.moveY - lastGesture.current.y;
-        lastGesture.current = { x: gs.moveX, y: gs.moveY };
-
-        setCropBox(prev => {
-          return updateCropBox(prev, activeHandle.current, dx, dy);
-        });
+      onPanResponderMove: (e: GestureResponderEvent) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const dx = pageX - lastPage.current.x;
+        const dy = pageY - lastPage.current.y;
+        lastPage.current = { x: pageX, y: pageY };
+        if (activeHandle.current) applyDelta(activeHandle.current, dx, dy);
       },
 
       onPanResponderRelease: () => {
@@ -218,92 +260,39 @@ const ImageCropPicker: React.FC<ImageCropPickerProps> = ({
     }),
   ).current;
 
-  const updateCropBox = (
-    prev: CropBox,
-    handle: DragHandle,
-    dx: number,
-    dy: number,
-  ): CropBox => {
-    const { x, y, width, height } = prev;
-    const il = imageLayout;
-    const ratio = getRatioValue(aspectRatio);
+  // ─── Ratio switch ─────────────────────────────────────────────────────────
 
-    let nx = x,
-      ny = y,
-      nw = width,
-      nh = height;
-
-    switch (handle) {
-      case 'move':
-        nx = clamp(x + dx, il.x, il.x + il.width - width);
-        ny = clamp(y + dy, il.y, il.y + il.height - height);
-        break;
-      case 'tl':
-        nw = Math.max(MIN_CROP_SIZE, width - dx);
-        nh = ratio ? nw / ratio : Math.max(MIN_CROP_SIZE, height - dy);
-        nx = x + (width - nw);
-        ny = y + (height - nh);
-        break;
-      case 'tr':
-        nw = Math.max(MIN_CROP_SIZE, width + dx);
-        nh = ratio ? nw / ratio : Math.max(MIN_CROP_SIZE, height - dy);
-        ny = y + (height - nh);
-        break;
-      case 'bl':
-        nw = Math.max(MIN_CROP_SIZE, width - dx);
-        nh = ratio ? nw / ratio : Math.max(MIN_CROP_SIZE, height + dy);
-        nx = x + (width - nw);
-        break;
-      case 'br':
-        nw = Math.max(MIN_CROP_SIZE, width + dx);
-        nh = ratio ? nw / ratio : Math.max(MIN_CROP_SIZE, height + dy);
-        break;
+  const switchRatio = (r: AspectRatio) => {
+    aspectRef.current = r;
+    setAspectRatio(r);
+    const rv = ratioVal(r);
+    if (rv !== null) {
+      const b = boxRef.current;
+      const img = imgRect.current;
+      const newH = Math.min(b.w / rv, img.h);
+      const newW = newH * rv;
+      commitBox({ ...b, w: newW, h: newH });
     }
-
-    // Clamp to image bounds
-    nx = clamp(nx, il.x, il.x + il.width - nw);
-    ny = clamp(ny, il.y, il.y + il.height - nh);
-    nw = Math.min(nw, il.x + il.width - nx);
-    nh = Math.min(nh, il.y + il.height - ny);
-
-    return { x: nx, y: ny, width: nw, height: nh };
   };
 
-  // ─── Aspect Ratio Switch ──────────────────────────────────────────────────
-
-  const switchRatio = (ratio: AspectRatio) => {
-    setAspectRatio(ratio);
-    if (imageLayout.width === 0) return;
-    const r = getRatioValue(ratio);
-    setCropBox(prev => {
-      if (r === null) return prev;
-      const newH = prev.width / r;
-      return { ...prev, height: newH };
-    });
-  };
-
-  // ─── Confirm Crop ─────────────────────────────────────────────────────────
+  // ─── Confirm crop ─────────────────────────────────────────────────────────
 
   const confirmCrop = () => {
-    if (!imageUri || imageLayout.width === 0) return;
-
-    const scaleX = naturalSize.width / imageLayout.width;
-    const scaleY = naturalSize.height / imageLayout.height;
-
-    const cropRegion: CropRegion = {
-      x: Math.round((cropBox.x - imageLayout.x) * scaleX),
-      y: Math.round((cropBox.y - imageLayout.y) * scaleY),
-      width: Math.round(cropBox.width * scaleX),
-      height: Math.round(cropBox.height * scaleY),
-    };
+    if (!imageUri) return;
+    const img = imgRect.current;
+    const b = boxRef.current;
+    const scaleX = naturalSize.w / img.w;
+    const scaleY = naturalSize.h / img.h;
 
     onCropComplete({
       uri: imageUri,
-      width: cropRegion.width,
-      height: cropRegion.height,
-      cropRegion,
+      cropRegion: {
+        x: Math.round((b.x - img.x) * scaleX),
+        y: Math.round((b.y - img.y) * scaleY),
+        width: Math.round(b.w * scaleX),
+        height: Math.round(b.h * scaleY),
+      },
     });
-
     setModalVisible(false);
   };
 
@@ -313,162 +302,143 @@ const ImageCropPicker: React.FC<ImageCropPickerProps> = ({
     onCancel?.();
   };
 
+  // ─── Overlays ─────────────────────────────────────────────────────────────
+
+  const renderOverlays = () => {
+    const img = imgRect.current;
+    const b = box;
+    if (img.w === 0) return null;
+
+    return (
+      <>
+        {/* 4 dark panels around crop box */}
+        <View
+          style={[
+            st.overlay,
+            { top: img.y, left: img.x, width: img.w, height: b.y - img.y },
+          ]}
+        />
+        <View
+          style={[
+            st.overlay,
+            {
+              top: b.y + b.h,
+              left: img.x,
+              width: img.w,
+              height: img.y + img.h - (b.y + b.h),
+            },
+          ]}
+        />
+        <View
+          style={[
+            st.overlay,
+            { top: b.y, left: img.x, width: b.x - img.x, height: b.h },
+          ]}
+        />
+        <View
+          style={[
+            st.overlay,
+            {
+              top: b.y,
+              left: b.x + b.w,
+              width: img.x + img.w - (b.x + b.w),
+              height: b.h,
+            },
+          ]}
+        />
+
+        {/* Crop border */}
+        <View
+          pointerEvents="none"
+          style={[
+            st.cropBorder,
+            { top: b.y, left: b.x, width: b.w, height: b.h },
+          ]}
+        >
+          <View
+            style={[st.grid, { left: '33%', top: 0, width: 1, height: '100%' }]}
+          />
+          <View
+            style={[st.grid, { left: '66%', top: 0, width: 1, height: '100%' }]}
+          />
+          <View
+            style={[st.grid, { top: '33%', left: 0, height: 1, width: '100%' }]}
+          />
+          <View
+            style={[st.grid, { top: '66%', left: 0, height: 1, width: '100%' }]}
+          />
+        </View>
+
+        {/* Corner handles */}
+        {(
+          [
+            ['tl', b.x - HS / 2, b.y - HS / 2],
+            ['tr', b.x + b.w - HS / 2, b.y - HS / 2],
+            ['bl', b.x - HS / 2, b.y + b.h - HS / 2],
+            ['br', b.x + b.w - HS / 2, b.y + b.h - HS / 2],
+          ] as [string, number, number][]
+        ).map(([key, lx, ly]) => (
+          <View
+            key={key}
+            pointerEvents="none"
+            style={[st.handle, { left: lx, top: ly }]}
+          />
+        ))}
+      </>
+    );
+  };
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
-      {/* Picker Buttons */}
-      <View style={styles.pickerRow}>
-        <TouchableOpacity style={styles.btn} onPress={pickFromLibrary}>
-          <Text style={styles.btnText}>Gallery</Text>
+    <View style={st.root}>
+      <View style={st.pickerRow}>
+        <TouchableOpacity style={st.btn} onPress={openGallery}>
+          <Text style={st.btnTxt}>Gallery</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.btn} onPress={pickFromCamera}>
-          <Text style={styles.btnText}>Camera</Text>
+        <TouchableOpacity style={st.btn} onPress={openCamera}>
+          <Text style={st.btnTxt}>Camera</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Crop Modal */}
       <Modal visible={modalVisible} animationType="slide" statusBarTranslucent>
-        <View style={styles.modal}>
-          {/* Image + Crop Overlay */}
-          <View style={styles.imageContainer} {...panResponder.panHandlers}>
+        <View style={st.modal}>
+          <View
+            ref={containerRef}
+            style={st.imageContainer}
+            onLayout={onContainerLayout}
+            {...pan.panHandlers}
+          >
             {imageUri && (
               <Image
                 source={{ uri: imageUri }}
-                style={styles.image}
+                style={StyleSheet.absoluteFill}
                 resizeMode="contain"
-                onLayout={e => onImageLayout(e.nativeEvent.layout)}
               />
             )}
-
-            {/* Dark overlay (4 pieces around crop box) */}
-            {imageLayout.width > 0 && (
-              <>
-                <View
-                  style={[
-                    styles.overlay,
-                    {
-                      top: imageLayout.y,
-                      left: imageLayout.x,
-                      width: imageLayout.width,
-                      height: cropBox.y - imageLayout.y,
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.overlay,
-                    {
-                      top: cropBox.y + cropBox.height,
-                      left: imageLayout.x,
-                      width: imageLayout.width,
-                      height:
-                        imageLayout.y +
-                        imageLayout.height -
-                        (cropBox.y + cropBox.height),
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.overlay,
-                    {
-                      top: cropBox.y,
-                      left: imageLayout.x,
-                      width: cropBox.x - imageLayout.x,
-                      height: cropBox.height,
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.overlay,
-                    {
-                      top: cropBox.y,
-                      left: cropBox.x + cropBox.width,
-                      width:
-                        imageLayout.x +
-                        imageLayout.width -
-                        (cropBox.x + cropBox.width),
-                      height: cropBox.height,
-                    },
-                  ]}
-                />
-
-                {/* Crop Border */}
-                <View
-                  style={[
-                    styles.cropBorder,
-                    {
-                      top: cropBox.y,
-                      left: cropBox.x,
-                      width: cropBox.width,
-                      height: cropBox.height,
-                    },
-                  ]}
-                >
-                  {/* Grid lines */}
-                  <View style={[styles.gridLine, styles.gridV1]} />
-                  <View style={[styles.gridLine, styles.gridV2]} />
-                  <View style={[styles.gridLine, styles.gridH1]} />
-                  <View style={[styles.gridLine, styles.gridH2]} />
-                </View>
-
-                {/* Corner Handles */}
-                {(['tl', 'tr', 'bl', 'br'] as const).map(corner => {
-                  const isLeft = corner.includes('l');
-                  const isTop = corner.includes('t');
-                  return (
-                    <View
-                      key={corner}
-                      style={[
-                        styles.handle,
-                        {
-                          top: isTop
-                            ? cropBox.y - HANDLE_SIZE / 2
-                            : cropBox.y + cropBox.height - HANDLE_SIZE / 2,
-                          left: isLeft
-                            ? cropBox.x - HANDLE_SIZE / 2
-                            : cropBox.x + cropBox.width - HANDLE_SIZE / 2,
-                        },
-                      ]}
-                    />
-                  );
-                })}
-              </>
-            )}
+            {renderOverlays()}
           </View>
 
-          {/* Aspect Ratio Bar */}
-          <View style={styles.ratioBar}>
+          <View style={st.ratioBar}>
             {(['free', '1:1', '16:9', '4:3'] as AspectRatio[]).map(r => (
               <TouchableOpacity
                 key={r}
                 onPress={() => switchRatio(r)}
-                style={[
-                  styles.ratioBtn,
-                  aspectRatio === r && styles.ratioBtnActive,
-                ]}
+                style={[st.ratioBtn, aspectRatio === r && st.ratioBtnOn]}
               >
-                <Text
-                  style={[
-                    styles.ratioText,
-                    aspectRatio === r && styles.ratioTextActive,
-                  ]}
-                >
+                <Text style={[st.ratioTxt, aspectRatio === r && st.ratioTxtOn]}>
                   {r.toUpperCase()}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          {/* Actions */}
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={cancel}>
-              <Text style={styles.cancelText}>Cancel</Text>
+          <View style={st.actions}>
+            <TouchableOpacity style={st.cancelBtn} onPress={cancel}>
+              <Text style={st.cancelTxt}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmBtn} onPress={confirmCrop}>
-              <Text style={styles.confirmText}>Crop</Text>
+            <TouchableOpacity style={st.confirmBtn} onPress={confirmCrop}>
+              <Text style={st.confirmTxt}>Crop</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -479,9 +449,8 @@ const ImageCropPicker: React.FC<ImageCropPickerProps> = ({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
+const st = StyleSheet.create({
+  root: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   pickerRow: { flexDirection: 'row', gap: 16 },
   btn: {
     backgroundColor: '#1a1a2e',
@@ -489,43 +458,30 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
   },
-  btnText: { color: '#e0e0ff', fontSize: 16, fontWeight: '600' },
-
+  btnTxt: { color: '#e0e0ff', fontSize: 16, fontWeight: '600' },
   modal: { flex: 1, backgroundColor: '#0d0d0d' },
-
   imageContainer: {
     flex: 1,
-    backgroundColor: '#000',
     marginTop: Platform.OS === 'ios' ? 50 : 24,
+    backgroundColor: '#000',
   },
-  image: { width: '100%', height: '100%' },
-
-  overlay: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
-
+  overlay: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.6)' },
   cropBorder: {
     position: 'absolute',
     borderWidth: 1.5,
     borderColor: '#fff',
     overflow: 'hidden',
   },
-
-  gridLine: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.3)' },
-  gridV1: { left: '33.3%', top: 0, width: 1, height: '100%' },
-  gridV2: { left: '66.6%', top: 0, width: 1, height: '100%' },
-  gridH1: { top: '33.3%', left: 0, height: 1, width: '100%' },
-  gridH2: { top: '66.6%', left: 0, height: 1, width: '100%' },
-
+  grid: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.25)' },
   handle: {
     position: 'absolute',
-    width: HANDLE_SIZE,
-    height: HANDLE_SIZE,
+    width: HS,
+    height: HS,
     backgroundColor: '#fff',
-    borderRadius: 4,
+    borderRadius: 3,
     borderWidth: 2,
     borderColor: '#1a1a2e',
-    zIndex: 10,
   },
-
   ratioBar: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -540,10 +496,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333',
   },
-  ratioBtnActive: { backgroundColor: '#1a1a2e', borderColor: '#4f4fff' },
-  ratioText: { color: '#888', fontSize: 13, fontWeight: '500' },
-  ratioTextActive: { color: '#a0a0ff' },
-
+  ratioBtnOn: { backgroundColor: '#1a1a2e', borderColor: '#4f4fff' },
+  ratioTxt: { color: '#888', fontSize: 13, fontWeight: '500' },
+  ratioTxtOn: { color: '#a0a0ff' },
   actions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -559,7 +514,7 @@ const styles = StyleSheet.create({
     borderColor: '#333',
     alignItems: 'center',
   },
-  cancelText: { color: '#aaa', fontSize: 16 },
+  cancelTxt: { color: '#aaa', fontSize: 16 },
   confirmBtn: {
     flex: 1,
     marginLeft: 8,
@@ -568,7 +523,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#4f4fff',
     alignItems: 'center',
   },
-  confirmText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  confirmTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
 
 export default ImageCropPicker;
