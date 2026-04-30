@@ -383,10 +383,10 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
     <View style={st.root}>
       <View style={st.pickerRow}>
         <TouchableOpacity style={st.btn} onPress={openGallery}>
-          <Text style={st.btnTxt}>Gallery</Text>
+          <Text style={st.btnTxt}>Galeri</Text>
         </TouchableOpacity>
         <TouchableOpacity style={st.btn} onPress={openCamera}>
-          <Text style={st.btnTxt}>Camera</Text>
+          <Text style={st.btnTxt}>Kamera</Text>
         </TouchableOpacity>
       </View>
 
@@ -415,7 +415,7 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
               disabled={isCropping}
             >
               <Text style={st.cancelTxt}>
-                {isCropping ? 'Processing...' : 'Cancel'}
+                {isCropping ? 'İşleniyor...' : 'İptal'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -426,7 +426,7 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
               {isCropping ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={st.confirmTxt}>Crop</Text>
+                <Text style={st.confirmTxt}>Kırp</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -451,7 +451,6 @@ const st = StyleSheet.create({
   modal: { flex: 1, backgroundColor: '#0d0d0d' },
   imageContainer: {
     flex: 1,
-    marginTop: Platform.OS === 'ios' ? 50 : 24,
     backgroundColor: '#000',
   },
   overlay: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.6)' },

@@ -8,17 +8,17 @@ export default function App() {
   const [cropped, setCropped] = useState<CroppedImage | null>(null);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#0d0d0d' }}>
       <SafeAreaView style={{ flex: 1 }}>
         <View style={styles.container}>
           <View style={{ flex: 1 }}>
-<ImageCropPicker
-          onCropComplete={result => {
-            setCropped(result);
-            console.log('Crop region (pixels):', result.cropRegion);
-          }}
-          onCancel={() => console.log('User cancelled')}
-        />
+            <ImageCropPicker
+              onCropComplete={result => {
+                setCropped(result);
+                console.log('Crop region (pixels):', result.cropRegion);
+              }}
+              onCancel={() => console.log('User cancelled')}
+            />
           </View>
 
           {cropped && (
