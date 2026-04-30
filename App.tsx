@@ -12,14 +12,13 @@ export default function App() {
       <SafeAreaView style={{ flex: 1 }}>
         <View style={styles.container}>
           <View style={{ flex: 1 }}>
-            <ImageCropPicker
-              defaultAspectRatio="free"
-              onCropComplete={result => {
-                setCropped(result);
-                console.log('Crop region (pixels):', result.cropRegion);
-              }}
-              onCancel={() => console.log('User cancelled')}
-            />
+<ImageCropPicker
+          onCropComplete={result => {
+            setCropped(result);
+            console.log('Crop region (pixels):', result.cropRegion);
+          }}
+          onCancel={() => console.log('User cancelled')}
+        />
           </View>
 
           {cropped && (

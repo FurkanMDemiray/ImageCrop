@@ -21,8 +21,6 @@ import ImageEditor from '@react-native-community/image-editor';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type AspectRatio = 'free' | '1:1' | '16:9' | '4:3';
-
 export interface CropRegion {
   x: number;
   y: number;
@@ -47,7 +45,6 @@ type Handle = 'tl' | 'tr' | 'bl' | 'br' | 'move' | null;
 interface Props {
   onCropComplete: (result: CroppedImage) => void;
   onCancel?: () => void;
-  defaultAspectRatio?: AspectRatio;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -60,13 +57,6 @@ const MIN = 60; // minimum crop dimension in px
 
 const clamp = (v: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, v));
-
-function ratioVal(r: AspectRatio): number | null {
-  if (r === '1:1') return 1;
-  if (r === '16:9') return 16 / 9;
-  if (r === '4:3') return 4 / 3;
-  return null;
-}
 
 /**
  * Given a container's page position + size, and the natural image dimensions,
@@ -96,16 +86,10 @@ function containRect(
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const ImageCropPicker: React.FC<Props> = ({
-  onCropComplete,
-  onCancel,
-  defaultAspectRatio = 'free',
-}) => {
+const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [naturalSize, setNaturalSize] = useState({ w: 1, h: 1 });
   const [modalVisible, setModalVisible] = useState(false);
-  const [aspectRatio, setAspectRatio] =
-    useState<AspectRatio>(defaultAspectRatio);
   const [box, setBox] = useState<Box>({ x: 0, y: 0, w: 0, h: 0 });
   const [isCropping, setIsCropping] = useState(false);
 
@@ -114,7 +98,6 @@ const ImageCropPicker: React.FC<Props> = ({
   const imgRect = useRef({ x: 0, y: 0, w: 0, h: 0 });
   const activeHandle = useRef<Handle>(null);
   const lastPage = useRef({ x: 0, y: 0 });
-  const aspectRef = useRef<AspectRatio>(defaultAspectRatio);
   const containerRef = useRef<View>(null);
 
   const commitBox = (b: Box) => {
@@ -180,7 +163,6 @@ const ImageCropPicker: React.FC<Props> = ({
   const applyDelta = (handle: Handle, dx: number, dy: number) => {
     const b = boxRef.current;
     const img = imgRect.current;
-    const rv = ratioVal(aspectRef.current);
 
     let { x, y, w, h } = b;
 
@@ -191,37 +173,33 @@ const ImageCropPicker: React.FC<Props> = ({
         break;
       }
       case 'tl': {
-        // Anchor: bottom-right corner stays fixed
         const anchorX = b.x + b.w;
         const anchorY = b.y + b.h;
         w = clamp(b.w - dx, MIN, anchorX - img.x);
-        h = rv ? w / rv : clamp(b.h - dy, MIN, anchorY - img.y);
+        h = clamp(b.h - dy, MIN, anchorY - img.y);
         x = anchorX - w;
         y = anchorY - h;
         break;
       }
       case 'tr': {
-        // Anchor: bottom-left corner stays fixed
         const anchorY = b.y + b.h;
         w = clamp(b.w + dx, MIN, img.x + img.w - b.x);
-        h = rv ? w / rv : clamp(b.h - dy, MIN, anchorY - img.y);
+        h = clamp(b.h - dy, MIN, anchorY - img.y);
         x = b.x; // left edge fixed
         y = anchorY - h;
         break;
       }
       case 'bl': {
-        // Anchor: top-right corner stays fixed
         const anchorX = b.x + b.w;
         w = clamp(b.w - dx, MIN, anchorX - img.x);
-        h = rv ? w / rv : clamp(b.h + dy, MIN, img.y + img.h - b.y);
+        h = clamp(b.h + dy, MIN, img.y + img.h - b.y);
         x = anchorX - w;
         y = b.y; // top edge fixed
         break;
       }
       case 'br': {
-        // Anchor: top-left corner stays fixed
         w = clamp(b.w + dx, MIN, img.x + img.w - b.x);
-        h = rv ? w / rv : clamp(b.h + dy, MIN, img.y + img.h - b.y);
+        h = clamp(b.h + dy, MIN, img.y + img.h - b.y);
         x = b.x;
         y = b.y;
         break;
@@ -261,21 +239,6 @@ const ImageCropPicker: React.FC<Props> = ({
       },
     }),
   ).current;
-
-  // ─── Ratio switch ─────────────────────────────────────────────────────────
-
-  const switchRatio = (r: AspectRatio) => {
-    aspectRef.current = r;
-    setAspectRatio(r);
-    const rv = ratioVal(r);
-    if (rv !== null) {
-      const b = boxRef.current;
-      const img = imgRect.current;
-      const newH = Math.min(b.w / rv, img.h);
-      const newW = newH * rv;
-      commitBox({ ...b, w: newW, h: newH });
-    }
-  };
 
   // ─── Confirm crop ─────────────────────────────────────────────────────────
 
@@ -445,20 +408,6 @@ const ImageCropPicker: React.FC<Props> = ({
             {renderOverlays()}
           </View>
 
-          <View style={st.ratioBar}>
-            {(['free', '1:1', '16:9', '4:3'] as AspectRatio[]).map(r => (
-              <TouchableOpacity
-                key={r}
-                onPress={() => switchRatio(r)}
-                style={[st.ratioBtn, aspectRatio === r && st.ratioBtnOn]}
-              >
-                <Text style={[st.ratioTxt, aspectRatio === r && st.ratioTxtOn]}>
-                  {r.toUpperCase()}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
           <View style={st.actions}>
             <TouchableOpacity
               style={[st.cancelBtn, isCropping && st.btnDisabled]}
@@ -522,23 +471,6 @@ const st = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#1a1a2e',
   },
-  ratioBar: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 8,
-    backgroundColor: '#111',
-  },
-  ratioBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  ratioBtnOn: { backgroundColor: '#1a1a2e', borderColor: '#4f4fff' },
-  ratioTxt: { color: '#888', fontSize: 13, fontWeight: '500' },
-  ratioTxtOn: { color: '#a0a0ff' },
   actions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
