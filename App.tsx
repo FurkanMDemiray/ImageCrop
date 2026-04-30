@@ -46,8 +46,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#0d0d0d',
   },
   preview: {
-    width: '70%',
-    height: '70%',
+    width: '100%',
+    height: '100%',
     resizeMode: 'contain',
     alignSelf: 'center',
   },
