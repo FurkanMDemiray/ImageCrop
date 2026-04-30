@@ -2,14 +2,13 @@ import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Image,
-  StyleSheet,
-  TouchableOpacity,
   Text,
   Modal,
-  PanResponder,
-  GestureResponderEvent,
-  Platform,
+  StyleSheet,
+  Pressable,
   ActivityIndicator,
+  GestureResponderEvent,
+  PanResponder,
 } from 'react-native';
 import {
   launchCamera,
@@ -382,12 +381,12 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
   return (
     <View style={st.root}>
       <View style={st.pickerRow}>
-        <TouchableOpacity style={st.btn} onPress={openGallery}>
+        <Pressable style={st.btn} onPress={openGallery}>
           <Text style={st.btnTxt}>Galeri</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={st.btn} onPress={openCamera}>
+        </Pressable>
+        <Pressable style={st.btn} onPress={openCamera}>
           <Text style={st.btnTxt}>Kamera</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       <Modal visible={modalVisible} animationType="slide" statusBarTranslucent>
@@ -409,7 +408,7 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
           </View>
 
           <View style={st.actions}>
-            <TouchableOpacity
+            <Pressable
               style={[st.cancelBtn, isCropping && st.btnDisabled]}
               onPress={cancel}
               disabled={isCropping}
@@ -417,8 +416,8 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
               <Text style={st.cancelTxt}>
                 {isCropping ? 'İşleniyor...' : 'İptal'}
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+            </Pressable>
+            <Pressable
               style={[st.confirmBtn, isCropping && st.btnDisabled]}
               onPress={confirmCrop}
               disabled={isCropping}
@@ -428,7 +427,7 @@ const ImageCropPicker: React.FC<Props> = ({ onCropComplete, onCancel }) => {
               ) : (
                 <Text style={st.confirmTxt}>Kırp</Text>
               )}
-            </TouchableOpacity>
+            </Pressable>
           </View>
         </View>
       </Modal>
